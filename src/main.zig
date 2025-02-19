@@ -254,14 +254,14 @@ const DeadlockTimeoutStruct = struct {
         return DeadlockTimeoutStruct{ .mutexA = mutexA, .mutexB = mutexB };
     }
 
-    fn deadThread1(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?FutexMutex.Error) void {
+    fn deadThread1(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?FutexMutex.Error, thread_num: usize) void {
         self.mutexA.timeoutLock(timeout) catch |e| {
             error_channel.* = e;
             return;
         };
         defer self.mutexA.unlock();
 
-        std.debug.print("Thread 1 locked mutex A\n", .{});
+        std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
 
         std.time.sleep(sec_to_nano_sec * 3);
 
@@ -271,17 +271,17 @@ const DeadlockTimeoutStruct = struct {
         };
         defer self.mutexB.unlock();
 
-        std.debug.print("Thread 1 locked mutex B\n", .{});
+        std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
     }
 
-    fn deadThread2(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?FutexMutex.Error) void {
+    fn deadThread2(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?FutexMutex.Error, thread_num: usize) void {
         self.mutexB.timeoutLock(timeout) catch |e| {
             error_channel.* = e;
             return;
         }; // Lock resources in the opposit order as thread1
         defer self.mutexB.unlock();
 
-        std.debug.print("Thread 2 locked mutex B\n", .{});
+        std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
 
         std.time.sleep(sec_to_nano_sec * 3);
 
@@ -291,7 +291,7 @@ const DeadlockTimeoutStruct = struct {
         };
         defer self.mutexA.unlock();
 
-        std.debug.print("Thread 2 locked mutex A\n", .{});
+        std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
     }
 
     pub fn deadlock(self: *DeadlockTimeoutStruct, timeout: i128) !void {
@@ -305,9 +305,9 @@ const DeadlockTimeoutStruct = struct {
         for (0..thread_tape.len) |index| {
             thread_tape[index] = ThreadAndErrorPtrHolder{};
             if (index % 2 == 0) {
-                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread1, .{ self, timeout, &thread_tape[index].error_channel });
+                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread1, .{ self, timeout + (index * sec_to_nano_sec), &thread_tape[index].error_channel, index });
             } else {
-                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread2, .{ self, timeout, &thread_tape[index].error_channel });
+                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread2, .{ self, timeout + (index * sec_to_nano_sec), &thread_tape[index].error_channel, index });
             }
         }
 
