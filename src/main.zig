@@ -160,8 +160,8 @@ pub const FutexMutex = struct {
         return (old_val == 0);
     }
 
-    /// Attempts to acquire the lock, but fails with `error.Timeout` if
-    /// `timeout_nanos` elapses first.
+    /// Attempts to acquire the lock, but fails with `error.Timeout` if `timeout_nanos` elapses first.
+    /// Uses futex to allow for low cpu utilization
     pub fn timeoutLock(self: *FutexMutex, timeout_nanos: i128) !void {
         // Fast path: try to change 0 (unlocked) to 1 (locked).
         if (atomicExchange(&self.value, 1) == 0) {
@@ -171,12 +171,13 @@ pub const FutexMutex = struct {
         // Slow path: mark as contended.
         _ = atomicExchange(&self.value, 2);
 
-        // Find the deadline (mark for deletion)
+        // Find the deadline
         const start_ns = std.time.nanoTimestamp();
         const deadline = start_ns + timeout_nanos;
 
         // Loop until we either acquire the lock or time out.
         while (true) {
+            std.debug.print("looped on thread: {d}\n", .{std.Thread.getCurrentId()});
             // If the lock looks free, try once more to set 0 -> 2.
             // (We always store 2 because we assume contended once we get here.)
             if (volatileLoad(&self.value) == 0) {
@@ -187,12 +188,12 @@ pub const FutexMutex = struct {
             // Figure out how much time remains.
             const now = std.time.nanoTimestamp();
             if (now >= deadline) {
+                // std.debug.print("took to long now: {d}, deadline: {d}, sub: {d}, sub to milsec: {d}\n", .{ now, deadline, now - deadline, @divTrunc(now - deadline, milli_to_nano_sec) });
                 return error.Timeout;
             }
-            const remain = deadline - now;
 
             // Convert the remaining time to a `timespec`.
-            var ts = nanosecondsToTimespec(remain);
+            var ts = nanosecondsToTimespec(deadline - now);
 
             // Futex wait. Passes 2 as val as it is the expected value
             const rc = futex(&self.value, futexOpWait, 2, &ts, null, 0);
@@ -201,7 +202,7 @@ pub const FutexMutex = struct {
                 switch (e) {
                     .SUCCESS => unreachable, // `-1` cannot be success
                     .AGAIN => {}, //do nothing
-                    .INTR => return error.Interrupt, // evil if true
+                    .INTR => return error.Interrupt, // Evil if true
                     .TIMEDOUT => return error.Timeout,
                     else => return error.Unknown,
                 }
@@ -357,7 +358,7 @@ pub fn main() !void {
     var deadlockTimeoutStruct = DeadlockTimeoutStruct.init(&mutex, &mutex1);
 
     for (0..5) |_| {
-        deadlockTimeoutStruct.deadlock(1 * sec_to_nano_sec) catch |e| {
+        deadlockTimeoutStruct.deadlock(3 * sec_to_nano_sec) catch |e| {
             switch (e) {
                 error.Timeout => {
                     std.debug.print("DeadlockTimeout\n", .{});
