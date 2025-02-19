@@ -7,7 +7,7 @@ const futexOpWake = 1;
 // For x86_64 Linux, the syscall number for futex is 202.
 const SYS_futex: usize = 202;
 
-//convertion between time denominations
+// Conversion between time denominations
 const micro_to_nano_sec: u64 = 1000;
 const milli_to_nano_sec: u64 = 1000 * micro_to_nano_sec;
 const sec_to_nano_sec: u64 = 1000 * milli_to_nano_sec;
@@ -135,7 +135,7 @@ fn nanosecondsToTimespec(ns: i128) timespec {
 /// - 1: locked (fast path, no waiters)
 /// - 2: locked with contention (waiters present)
 pub const FutexMutex = struct {
-    pub const Error = error{ Timeout, Unknown, Interupt };
+    pub const Error = error{ Timeout, Unknown, Interrupt };
 
     value: i32 = 0,
 
@@ -196,13 +196,13 @@ pub const FutexMutex = struct {
             var ts = nanosecondsToTimespec(remain);
 
             // 4) Futex wait. Passes 2 as val as it is the expected value
-            const rc = futex(&self.value, 0, 2, &ts, null, 0);
+            const rc = futex(&self.value, futexOpWait, 2, &ts, null, 0);
             if (rc == -1) {
-                const e = std.posix.errno(@as(i64, @intCast(rc)));
+                const e = std.posix.errno(rc);
                 switch (e) {
                     .SUCCESS => unreachable, // `-1` cannot be success
                     .AGAIN => {}, //do nothing
-                    .INTR => return error.Interupt, // evil if true
+                    .INTR => return error.Interrupt, // evil if true
                     .TIMEDOUT => return error.Timeout,
                     else => return error.Unknown,
                 }
@@ -221,93 +221,84 @@ pub const FutexMutex = struct {
     }
 };
 
-pub fn main() !void {
-    var mutex = FutexMutex{};
-
-    mutex.lock();
-    std.debug.print("Acquired futex mutex\n", .{});
-    // Critical section goes here.
-    mutex.unlock();
-    std.debug.print("Released futex mutex\n", .{});
-
-    var mutex1 = FutexMutex{};
-
-    var deadlockTimeoutStruct = DeadlockTimeoutStruct.init(&mutex, &mutex1);
-
-    deadlockTimeoutStruct.deadlock(2 * sec_to_nano_sec) catch |e| {
-        switch (e) {
-            error.Timeout => {
-                std.debug.print("DeadlockTimeout\n", .{});
-            },
-            else => {
-                return e;
-            },
-        }
-    };
-}
-
+///A struct that holds logic and containerizes the data for the showcase
 const DeadlockTimeoutStruct = struct {
     mutexA: *FutexMutex,
     mutexB: *FutexMutex,
 
+    evil_boolean_A: i1 = 0,
+    evil_boolean_B: i1 = -1,
+
+    ///Creates struct and adds the mutexes to the fields
     fn init(mutexA: *FutexMutex, mutexB: *FutexMutex) DeadlockTimeoutStruct {
         return DeadlockTimeoutStruct{ .mutexA = mutexA, .mutexB = mutexB };
     }
-
+    /// first thread that does the lock acquisition in order
     fn deadThread1(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?FutexMutex.Error, thread_num: usize) void {
-        self.mutexA.timeoutLock(timeout) catch |e| {
-            error_channel.* = e;
-            return;
-        };
-        defer self.mutexA.unlock();
+        {
+            self.mutexA.timeoutLock(timeout) catch |e| {
+                error_channel.* = e;
+                return;
+            };
+            defer self.mutexA.unlock();
 
-        std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
+            std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
 
-        std.time.sleep(sec_to_nano_sec * 3);
+            std.time.sleep(sec_to_nano_sec * 1);
 
-        self.mutexB.timeoutLock(timeout) catch |e| {
-            error_channel.* = e;
-            return;
-        };
-        defer self.mutexB.unlock();
+            self.mutexB.timeoutLock(timeout) catch |e| {
+                error_channel.* = e;
+                return;
+            };
+            defer self.mutexB.unlock();
 
-        std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
+            std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
+            self.evil_boolean_B = ~self.evil_boolean_A;
+        }
+        std.log.debug("Thread {d} unlocked both Mutexes without a timeout\n", .{thread_num});
     }
 
+    /// First thread that does the lock acquisition in reverse order
     fn deadThread2(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?FutexMutex.Error, thread_num: usize) void {
-        self.mutexB.timeoutLock(timeout) catch |e| {
-            error_channel.* = e;
-            return;
-        }; // Lock resources in the opposit order as thread1
-        defer self.mutexB.unlock();
+        {
+            self.mutexB.timeoutLock(timeout) catch |e| {
+                error_channel.* = e;
+                return;
+            }; // Lock resources in the opposite order as thread1 so that it deadlocks
+            defer self.mutexB.unlock();
 
-        std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
+            std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
 
-        std.time.sleep(sec_to_nano_sec * 3);
+            std.time.sleep(sec_to_nano_sec * 1);
 
-        self.mutexA.timeoutLock(timeout) catch |e| {
-            error_channel.* = e;
-            return;
-        };
-        defer self.mutexA.unlock();
+            self.mutexA.timeoutLock(timeout) catch |e| {
+                error_channel.* = e;
+                return;
+            };
+            defer self.mutexA.unlock();
 
-        std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
+            std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
+
+            self.evil_boolean_A = ~self.evil_boolean_B;
+        }
+        std.log.debug("Thread {d} unlocked both Mutexes without a timeout\n", .{thread_num});
     }
 
+    /// Starts the threads so that dead lock can happen
     pub fn deadlock(self: *DeadlockTimeoutStruct, timeout: i128) !void {
         const ThreadAndErrorPtrHolder = struct {
             error_channel: ?FutexMutex.Error = null,
             thread: std.Thread = undefined,
         };
-
-        var thread_tape: [30]ThreadAndErrorPtrHolder = undefined;
+        const len: comptime_int = 2;
+        var thread_tape: [len]ThreadAndErrorPtrHolder = undefined;
 
         for (0..thread_tape.len) |index| {
             thread_tape[index] = ThreadAndErrorPtrHolder{};
             if (index % 2 == 0) {
-                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread1, .{ self, timeout + (index * sec_to_nano_sec), &thread_tape[index].error_channel, index });
+                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread1, .{ self, timeout, &thread_tape[index].error_channel, index });
             } else {
-                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread2, .{ self, timeout + (index * sec_to_nano_sec), &thread_tape[index].error_channel, index });
+                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread2, .{ self, timeout, &thread_tape[index].error_channel, index });
             }
         }
 
@@ -321,7 +312,7 @@ const DeadlockTimeoutStruct = struct {
         for (0..thread_tape.len) |index| {
             thread_tape[index].thread.join();
         }
-        var error_tape: [30]?FutexMutex.Error = undefined;
+        var error_tape: [len]?FutexMutex.Error = undefined;
         for (0..thread_tape.len) |index| {
             if (thread_tape[index].error_channel) |error_channel_not_null| {
                 std.log.debug("thread no.: {d} errored\n", .{index});
@@ -344,3 +335,30 @@ const DeadlockTimeoutStruct = struct {
         // }
     }
 };
+
+pub fn main() !void {
+    var mutex = FutexMutex{};
+
+    mutex.lock();
+    std.debug.print("Acquired futex mutex\n", .{});
+    // Critical code goes here.
+    mutex.unlock();
+    std.debug.print("Released futex mutex\n", .{});
+
+    var mutex1 = FutexMutex{};
+
+    var deadlockTimeoutStruct = DeadlockTimeoutStruct.init(&mutex, &mutex1);
+
+    for (0..5) |_| {
+        deadlockTimeoutStruct.deadlock(1 * sec_to_nano_sec) catch |e| {
+            switch (e) {
+                error.Timeout => {
+                    std.debug.print("DeadlockTimeout\n", .{});
+                },
+                else => {
+                    return e;
+                },
+            }
+        };
+    }
+}
