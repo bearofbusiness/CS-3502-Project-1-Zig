@@ -297,13 +297,13 @@ const DeadlockTimeoutStruct = struct {
     pub fn deadlock(self: *DeadlockTimeoutStruct, timeout: i128) !void {
         const ThreadAndErrorPtrHolder = struct {
             error_channel: ?FutexMutex.Error = null,
-            thread: std.Thread,
+            thread: std.Thread = undefined,
         };
 
         var thread_tape: [30]ThreadAndErrorPtrHolder = undefined;
 
         for (0..thread_tape.len) |index| {
-            thread_tape[index] = ThreadAndErrorPtrHolder{ .thread = undefined };
+            thread_tape[index] = ThreadAndErrorPtrHolder{};
             if (index % 2 == 0) {
                 thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread1, .{ self, timeout, &thread_tape[index].error_channel });
             } else {
