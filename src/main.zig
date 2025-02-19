@@ -163,20 +163,19 @@ pub const FutexMutex = struct {
     /// Attempts to acquire the lock, but fails with `error.Timeout` if
     /// `timeout_nanos` elapses first.
     pub fn timeoutLock(self: *FutexMutex, timeout_nanos: i128) !void {
-        // 1) Fast path: try to lock by setting 0 -> 1.
+        // Fast path: try to change 0 (unlocked) to 1 (locked).
         if (atomicExchange(&self.value, 1) == 0) {
             return;
         }
 
-        // 2) Mark as contended. (State becomes 2 if someone else has the lock.)
+        // Slow path: mark as contended.
         _ = atomicExchange(&self.value, 2);
 
-        // We'll measure the deadline so we can figure out how much time remains
-        // on each iteration.
+        // Find the deadline (mark for deletion)
         const start_ns = std.time.nanoTimestamp();
         const deadline = start_ns + timeout_nanos;
 
-        // 3) Loop until we either acquire the lock or time out.
+        // Loop until we either acquire the lock or time out.
         while (true) {
             // If the lock looks free, try once more to set 0 -> 2.
             // (We always store 2 because we assume contended once we get here.)
@@ -195,7 +194,7 @@ pub const FutexMutex = struct {
             // Convert the remaining time to a `timespec`.
             var ts = nanosecondsToTimespec(remain);
 
-            // 4) Futex wait. Passes 2 as val as it is the expected value
+            // Futex wait. Passes 2 as val as it is the expected value
             const rc = futex(&self.value, futexOpWait, 2, &ts, null, 0);
             if (rc == -1) {
                 const e = std.posix.errno(rc);
@@ -370,4 +369,11 @@ pub fn main() !void {
         };
         std.debug.print("evil_boolean_A: {d}, evil_boolean_B: {d}\n", .{ deadlockTimeoutStruct.evil_boolean_A, deadlockTimeoutStruct.evil_boolean_B });
     }
+}
+
+test "deadlock with std lib" {
+    var mutex = std.Thread.Mutex{};
+
+    mutex.lock();
+    mutex.lock();
 }
