@@ -234,7 +234,16 @@ pub fn main() !void {
 
     var deadlockTimeoutStruct = DeadlockTimeoutStruct.init(&mutex, &mutex1);
 
-    try deadlockTimeoutStruct.deadlock(2 * sec_to_nano_sec);
+    deadlockTimeoutStruct.deadlock(2 * sec_to_nano_sec) catch |e| {
+        switch (e) {
+            error.Timeout => {
+                std.debug.print("DeadlockTimeout\n", .{});
+            },
+            else => {
+                return e;
+            },
+        }
+    };
 }
 
 const DeadlockTimeoutStruct = struct {
