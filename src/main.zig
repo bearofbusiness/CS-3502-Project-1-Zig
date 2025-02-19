@@ -321,10 +321,18 @@ const DeadlockTimeoutStruct = struct {
         for (0..thread_tape.len) |index| {
             thread_tape[index].thread.join();
         }
-
+        var error_tape: [30]?FutexMutex.Error = undefined;
         for (0..thread_tape.len) |index| {
             if (thread_tape[index].error_channel) |error_channel_not_null| {
-                return error_channel_not_null;
+                std.log.debug("thread no.: {d} errored", .{index});
+                error_tape[index] = error_channel_not_null;
+            } else {
+                error_tape[index] = null;
+            }
+        }
+        for (error_tape) |err| {
+            if (err) |err_not_null| {
+                return err_not_null;
             }
         }
         // if (error_channel1) |error_channel_not_null| {
