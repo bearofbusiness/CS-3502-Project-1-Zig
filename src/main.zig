@@ -244,7 +244,7 @@ const DeadlockTimeoutStruct = struct {
 
             std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
 
-            std.time.sleep(sec_to_nano_sec * 1);
+            std.time.sleep(micro_to_nano_sec * 3);
 
             self.mutexB.timeoutLock(timeout) catch |e| {
                 error_channel.* = e;
@@ -253,9 +253,13 @@ const DeadlockTimeoutStruct = struct {
             defer self.mutexB.unlock();
 
             std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
-            self.evil_boolean_B = ~self.evil_boolean_A;
+            if (self.evil_boolean_A != self.evil_boolean_B) {
+                self.evil_boolean_B = self.evil_boolean_A;
+            } else {
+                self.evil_boolean_B = ~self.evil_boolean_B;
+            }
         }
-        std.log.debug("Thread {d} unlocked both Mutexes without a timeout\n", .{thread_num});
+        std.debug.print("Thread {d} unlocked both Mutexes without a timeout\n", .{thread_num});
     }
 
     /// First thread that does the lock acquisition in reverse order
@@ -269,7 +273,7 @@ const DeadlockTimeoutStruct = struct {
 
             std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
 
-            std.time.sleep(sec_to_nano_sec * 1);
+            std.time.sleep(micro_to_nano_sec * 3);
 
             self.mutexA.timeoutLock(timeout) catch |e| {
                 error_channel.* = e;
@@ -279,9 +283,13 @@ const DeadlockTimeoutStruct = struct {
 
             std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
 
-            self.evil_boolean_A = ~self.evil_boolean_B;
+            if (self.evil_boolean_A != self.evil_boolean_B) {
+                self.evil_boolean_A = self.evil_boolean_B;
+            } else {
+                self.evil_boolean_A = ~self.evil_boolean_A;
+            }
         }
-        std.log.debug("Thread {d} unlocked both Mutexes without a timeout\n", .{thread_num});
+        std.debug.print("Thread {d} unlocked both Mutexes without a timeout\n", .{thread_num});
     }
 
     /// Starts the threads so that dead lock can happen
@@ -315,7 +323,7 @@ const DeadlockTimeoutStruct = struct {
         var error_tape: [len]?FutexMutex.Error = undefined;
         for (0..thread_tape.len) |index| {
             if (thread_tape[index].error_channel) |error_channel_not_null| {
-                std.log.debug("thread no.: {d} errored\n", .{index});
+                std.debug.print("thread no.: {d} errored\n", .{index});
                 error_tape[index] = error_channel_not_null;
             } else {
                 error_tape[index] = null;
@@ -360,5 +368,6 @@ pub fn main() !void {
                 },
             }
         };
+        std.debug.print("evil_boolean_A: {d}, evil_boolean_B: {d}\n", .{ deadlockTimeoutStruct.evil_boolean_A, deadlockTimeoutStruct.evil_boolean_B });
     }
 }
