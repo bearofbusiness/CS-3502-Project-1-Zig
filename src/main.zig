@@ -1,22 +1,22 @@
 const std = @import("std");
 const FutexMutex = @import("futex_mutex.zig").FutexMutex;
-const FutexMutexWithDeadlockDetection = @import("futex_mutex_deadlock_detection.zig").FutexMutex;
+const FutexMutexDeadlockDetection = @import("futex_mutex_deadlock_detection.zig").FutexMutex;
 const DeadlockTimeoutStruct = @import("futex_mutex.zig").DeadlockTimeoutStruct;
 
 ///A struct that holds logic and containerizes the data for the showcase
 const DeadlockDetectionStruct = struct {
-    mutexA: *FutexMutexWithDeadlockDetection,
-    mutexB: *FutexMutexWithDeadlockDetection,
+    mutexA: *FutexMutexDeadlockDetection,
+    mutexB: *FutexMutexDeadlockDetection,
 
     evil_boolean_A: i1 = 0,
     evil_boolean_B: i1 = -1,
 
     ///Creates struct and adds the mutexes to the fields
-    pub fn init(mutexA: *FutexMutexWithDeadlockDetection, mutexB: *FutexMutexWithDeadlockDetection) DeadlockDetectionStruct {
+    pub fn init(mutexA: *FutexMutexDeadlockDetection, mutexB: *FutexMutexDeadlockDetection) DeadlockDetectionStruct {
         return DeadlockDetectionStruct{ .mutexA = mutexA, .mutexB = mutexB };
     }
     /// first thread that does the lock acquisition in order
-    fn deadThread1(self: *DeadlockDetectionStruct, timeout: i128, error_channel: *?(FutexMutexWithDeadlockDetection.Error || std.mem.Allocator.Error), thread_num: usize) void {
+    fn deadThread1(self: *DeadlockDetectionStruct, timeout: i128, error_channel: *?(FutexMutexDeadlockDetection.Error || std.mem.Allocator.Error), thread_num: usize) void {
         {
             self.mutexA.timeoutLock(timeout) catch |e| {
                 error_channel.* = e;
@@ -45,7 +45,7 @@ const DeadlockDetectionStruct = struct {
     }
 
     /// First thread that does the lock acquisition in reverse order
-    fn deadThread2(self: *DeadlockDetectionStruct, timeout: i128, error_channel: *?(FutexMutexWithDeadlockDetection.Error || std.mem.Allocator.Error), thread_num: usize) void {
+    fn deadThread2(self: *DeadlockDetectionStruct, timeout: i128, error_channel: *?(FutexMutexDeadlockDetection.Error || std.mem.Allocator.Error), thread_num: usize) void {
         {
             self.mutexB.timeoutLock(timeout) catch |e| {
                 error_channel.* = e;
@@ -95,7 +95,88 @@ const DeadlockDetectionStruct = struct {
         for (0..thread_tape.len) |index| {
             thread_tape[index].thread.join();
         }
-        var error_tape: [len]?(FutexMutexWithDeadlockDetection.Error || std.mem.Allocator.Error) = undefined;
+        var error_tape: [len]?(FutexMutexDeadlockDetection.Error || std.mem.Allocator.Error) = undefined;
+        for (0..thread_tape.len) |index| {
+            if (thread_tape[index].error_channel) |error_channel_not_null| {
+                std.debug.print("thread no.: {d} errored\n", .{index});
+                error_tape[index] = error_channel_not_null;
+            } else {
+                error_tape[index] = null;
+            }
+        }
+        for (error_tape) |err| {
+            if (err) |err_not_null| {
+                return err_not_null;
+            }
+        }
+    }
+
+    /// This thread function always locks the "lower" mutex pointer first, then the "higher" one,
+    /// preventing the cross-lock scenario that can lead to deadlock.
+    fn safeThread(self: *DeadlockDetectionStruct, timeout: i128, error_channel: *?(FutexMutexDeadlockDetection.Error || std.mem.Allocator.Error), thread_num: usize) void {
+        // Determine which mutex pointer is "lower" vs "higher" in address
+        var first_mutex = self.mutexA;
+        var second_mutex = self.mutexB;
+
+        if (@intFromPtr(first_mutex) > @intFromPtr(second_mutex)) {
+            const tmp = first_mutex;
+            first_mutex = second_mutex;
+            second_mutex = tmp;
+        }
+
+        // Lock the first mutex
+        first_mutex.timeoutLock(timeout) catch |e| {
+            error_channel.* = e;
+            return;
+        };
+        defer first_mutex.unlock();
+
+        std.debug.print("Thread {d} locked the first mutex\n", .{thread_num});
+
+        // Simulate some work
+        std.time.sleep(std.time.ns_per_ms * 3);
+
+        // lock the second mutex
+        second_mutex.timeoutLock(timeout) catch |e| {
+            error_channel.* = e;
+            return;
+        };
+        defer second_mutex.unlock();
+
+        std.debug.print("Thread {d} locked the second mutex\n", .{thread_num});
+
+        // Do any "evil_boolean" logic or shared data changes
+        if (self.evil_boolean_A != self.evil_boolean_B) {
+            self.evil_boolean_B = self.evil_boolean_A;
+        } else {
+            self.evil_boolean_B = ~self.evil_boolean_B;
+        }
+
+        std.debug.print("Thread {d} unlocked both Mutexes without a timeout\n", .{thread_num});
+    }
+
+    /// Phase 4 demonstration: We show that, with ordered locking, no deadlock occurs.
+    pub fn avoidDeadlock(self: *DeadlockDetectionStruct, timeout: i128) !void {
+        const ThreadAndErrorPtrHolder = struct {
+            error_channel: ?(FutexMutexDeadlockDetection.Error || std.mem.Allocator.Error) = null,
+            thread: std.Thread = undefined,
+        };
+        const len: comptime_int = 2;
+        var thread_tape: [len]ThreadAndErrorPtrHolder = undefined;
+
+        // Spawn 2 threads that both do "safe" locking
+        for (0..thread_tape.len) |index| {
+            thread_tape[index] = ThreadAndErrorPtrHolder{};
+            thread_tape[index].thread = try std.Thread.spawn(.{}, safeThread, .{ self, timeout, &thread_tape[index].error_channel, index });
+        }
+
+        // Join the threads
+        for (0..thread_tape.len) |index| {
+            thread_tape[index].thread.join();
+        }
+
+        // Collect & return any errors
+        var error_tape: [len]?(FutexMutexDeadlockDetection.Error || std.mem.Allocator.Error) = undefined;
         for (0..thread_tape.len) |index| {
             if (thread_tape[index].error_channel) |error_channel_not_null| {
                 std.debug.print("thread no.: {d} errored\n", .{index});
@@ -145,8 +226,8 @@ pub fn main() !void {
 
     std.debug.print("\n\nDeadlock Detection\n", .{});
 
-    var mutex2 = FutexMutexWithDeadlockDetection{};
-    var mutex3 = FutexMutexWithDeadlockDetection{};
+    var mutex2 = FutexMutexDeadlockDetection{};
+    var mutex3 = FutexMutexDeadlockDetection{};
 
     var deadlockDetectionStruct = DeadlockDetectionStruct.init(&mutex2, &mutex3);
 
@@ -166,6 +247,9 @@ pub fn main() !void {
         };
         std.debug.print("evil_boolean_A: {d}, evil_boolean_B: {d}\n\n", .{ deadlockDetectionStruct.evil_boolean_A, deadlockDetectionStruct.evil_boolean_B });
     }
+
+    try deadlockDetectionStruct.avoidDeadlock(5 * std.time.ns_per_s);
+    std.debug.print("Phase 4 completed without deadlock\n", .{});
 }
 
 test "deadlock with std lib" {
