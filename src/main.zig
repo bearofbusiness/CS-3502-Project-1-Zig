@@ -166,14 +166,6 @@ pub fn main() !void {
         };
         std.debug.print("evil_boolean_A: {d}, evil_boolean_B: {d}\n\n", .{ deadlockDetectionStruct.evil_boolean_A, deadlockDetectionStruct.evil_boolean_B });
     }
-
-    for (0..1000000000) |_| {
-        var mutex_test = FutexMutexWithDeadlockDetection.init();
-        try mutex_test.lock();
-        mutex_test.unlock();
-    }
-    std.debug.print("done\n", .{});
-    _ = try std.io.getStdIn().reader().readByte();
 }
 
 test "deadlock with std lib" {
