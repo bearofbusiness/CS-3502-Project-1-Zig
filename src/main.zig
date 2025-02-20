@@ -1,20 +1,22 @@
 const std = @import("std");
 const FutexMutex = @import("futex_mutex.zig").FutexMutex;
+const FutexMutexWithDeadlockDetection = @import("futex_mutex_deadlock_detection.zig").FutexMutex;
+const DeadlockTimeoutStruct = @import("futex_mutex.zig").DeadlockTimeoutStruct;
 
 ///A struct that holds logic and containerizes the data for the showcase
-const DeadlockTimeoutStruct = struct {
-    mutexA: *FutexMutex,
-    mutexB: *FutexMutex,
+const DeadlockDetectionStruct = struct {
+    mutexA: *FutexMutexWithDeadlockDetection,
+    mutexB: *FutexMutexWithDeadlockDetection,
 
     evil_boolean_A: i1 = 0,
     evil_boolean_B: i1 = -1,
 
     ///Creates struct and adds the mutexes to the fields
-    fn init(mutexA: *FutexMutex, mutexB: *FutexMutex) DeadlockTimeoutStruct {
-        return DeadlockTimeoutStruct{ .mutexA = mutexA, .mutexB = mutexB };
+    pub fn init(mutexA: *FutexMutexWithDeadlockDetection, mutexB: *FutexMutexWithDeadlockDetection) DeadlockDetectionStruct {
+        return DeadlockDetectionStruct{ .mutexA = mutexA, .mutexB = mutexB };
     }
     /// first thread that does the lock acquisition in order
-    fn deadThread1(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?(FutexMutex.Error || std.mem.Allocator.Error), thread_num: usize) void {
+    fn deadThread1(self: *DeadlockDetectionStruct, timeout: i128, error_channel: *?(FutexMutexWithDeadlockDetection.Error || std.mem.Allocator.Error), thread_num: usize) void {
         {
             self.mutexA.timeoutLock(timeout) catch |e| {
                 error_channel.* = e;
@@ -43,7 +45,7 @@ const DeadlockTimeoutStruct = struct {
     }
 
     /// First thread that does the lock acquisition in reverse order
-    fn deadThread2(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?(FutexMutex.Error || std.mem.Allocator.Error), thread_num: usize) void {
+    fn deadThread2(self: *DeadlockDetectionStruct, timeout: i128, error_channel: *?(FutexMutexWithDeadlockDetection.Error || std.mem.Allocator.Error), thread_num: usize) void {
         {
             self.mutexB.timeoutLock(timeout) catch |e| {
                 error_channel.* = e;
@@ -73,7 +75,7 @@ const DeadlockTimeoutStruct = struct {
     }
 
     /// Starts the threads so that dead lock can happen
-    pub fn deadlock(self: *DeadlockTimeoutStruct, timeout: i128) !void {
+    pub fn deadlock(self: *DeadlockDetectionStruct, timeout: i128) !void {
         const ThreadAndErrorPtrHolder = struct {
             error_channel: ?FutexMutex.Error = null,
             thread: std.Thread = undefined,
@@ -93,7 +95,7 @@ const DeadlockTimeoutStruct = struct {
         for (0..thread_tape.len) |index| {
             thread_tape[index].thread.join();
         }
-        var error_tape: [len]?(FutexMutex.Error || std.mem.Allocator.Error) = undefined;
+        var error_tape: [len]?(FutexMutexWithDeadlockDetection.Error || std.mem.Allocator.Error) = undefined;
         for (0..thread_tape.len) |index| {
             if (thread_tape[index].error_channel) |error_channel_not_null| {
                 std.debug.print("thread no.: {d} errored\n", .{index});
@@ -111,21 +113,45 @@ const DeadlockTimeoutStruct = struct {
 };
 
 pub fn main() !void {
+    std.debug.print("\n\nBasic mutex usage\n", .{});
+
     var mutex = FutexMutex{};
 
-    try mutex.lock();
     try mutex.lock();
     std.debug.print("Acquired futex mutex\n", .{});
     // Critical code goes here.
     mutex.unlock();
     std.debug.print("Released futex mutex\n", .{});
 
+    std.debug.print("\n\nDeadlock Timeout\n", .{});
+
     var mutex1 = FutexMutex{};
 
     var deadlockTimeoutStruct = DeadlockTimeoutStruct.init(&mutex, &mutex1);
 
     for (0..5) |_| {
-        deadlockTimeoutStruct.deadlock(5 * std.time.ns_per_s) catch |e| {
+        deadlockTimeoutStruct.deadlock(1 * std.time.ns_per_s) catch |e| {
+            switch (e) {
+                error.Timeout => {
+                    std.debug.print("ThreadTimeout: possable deadlock\n", .{});
+                },
+                else => {
+                    return e;
+                },
+            }
+        };
+        std.debug.print("evil_boolean_A: {d}, evil_boolean_B: {d}\n\n", .{ deadlockTimeoutStruct.evil_boolean_A, deadlockTimeoutStruct.evil_boolean_B });
+    }
+
+    std.debug.print("\n\nDeadlock Detection\n", .{});
+
+    var mutex2 = FutexMutexWithDeadlockDetection{};
+    var mutex3 = FutexMutexWithDeadlockDetection{};
+
+    var deadlockDetectionStruct = DeadlockDetectionStruct.init(&mutex2, &mutex3);
+
+    for (0..5) |_| {
+        deadlockDetectionStruct.deadlock(1 * std.time.ns_per_s) catch |e| {
             switch (e) {
                 error.Timeout => {
                     std.debug.print("ThreadTimeout: possable deadlock\n", .{});
@@ -138,8 +164,16 @@ pub fn main() !void {
                 },
             }
         };
-        std.debug.print("evil_boolean_A: {d}, evil_boolean_B: {d}\n", .{ deadlockTimeoutStruct.evil_boolean_A, deadlockTimeoutStruct.evil_boolean_B });
+        std.debug.print("evil_boolean_A: {d}, evil_boolean_B: {d}\n\n", .{ deadlockDetectionStruct.evil_boolean_A, deadlockDetectionStruct.evil_boolean_B });
     }
+
+    for (0..1000000000) |_| {
+        var mutex_test = FutexMutexWithDeadlockDetection.init();
+        try mutex_test.lock();
+        mutex_test.unlock();
+    }
+    std.debug.print("done\n", .{});
+    _ = try std.io.getStdIn().reader().readByte();
 }
 
 test "deadlock with std lib" {

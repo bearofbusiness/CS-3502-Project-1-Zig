@@ -13,17 +13,6 @@ pub const timespec = struct {
     tv_nsec: i64,
 };
 
-const FutexMap = std.HashMap( //
-    *FutexMutex, // key type
-    FutexMutex.MutexInfo, // value type
-    FutexMutex.MapContext, // hashing function and equality function
-    70 // a lower max load persentage for a faster speed
-);
-
-fn initFutexMap(allocator: std.mem.Allocator) FutexMap {
-    return FutexMap.init(allocator);
-}
-
 /// A futex‑based mutex.
 ///
 /// It uses a single i32 variable with the following meanings:
@@ -31,113 +20,30 @@ fn initFutexMap(allocator: std.mem.Allocator) FutexMap {
 /// - 1: locked (fast path, no waiters)
 /// - 2: locked with contention (waiters present)
 pub const FutexMutex = struct {
-    pub const Error = error{ Timeout, Unknown, Interrupt, DeadlockDetected };
-
-    const MutexInfo = struct {
-        const MutexInfoWaitingThreadsMap = std.HashMap(std.Thread.Id, void, MutexInfoContext, 80);
-        const MutexInfoContext = struct {
-            pub fn hash(_: MutexInfoContext, mutex_info_ptr: std.Thread.Id) u64 {
-                return mutex_info_ptr;
-            }
-            pub fn eql(_: MutexInfoContext, a: std.Thread.Id, b: std.Thread.Id) bool {
-                return a == b;
-            }
-        };
-
-        owner: ?std.Thread.Id = null,
-        waiting_threads: MutexInfoWaitingThreadsMap = MutexInfoWaitingThreadsMap.init(std.heap.page_allocator),
-    };
-
-    const MapContext = struct {
-        pub fn hash(_: MapContext, mutex_ptr: *FutexMutex) u64 {
-            return @intFromPtr(mutex_ptr);
-        }
-        pub fn eql(_: MapContext, a: *FutexMutex, b: *FutexMutex) bool {
-            return a == b;
-        }
-    };
-
-    var global_futex_map = initFutexMap(std.heap.page_allocator);
-    var global_graph_lock = FutexMutex{ .use_deadlock_checking = false };
+    pub const Error = error{ Timeout, Unknown, Interrupt };
 
     value: i32 = 0,
-    use_deadlock_checking: bool = true,
-
-    fn lockGlobalGraphMutex() void {
-        FutexMutex.global_graph_lock.lock() catch {
-            @panic("FutexMutex global graph lock errored. should be impossable");
-        };
-    }
-
-    fn unlockGlobalGraphMutex() void {
-        FutexMutex.global_graph_lock.unlock();
-    }
 
     /// Attempts to acquire the lock.
     pub fn lock(self: *FutexMutex) !void {
         // Fast path: try to change 0 (unlocked) to 1 (locked).
         if (atomicExchange(&self.value, 1) == 0) {
-            if (self.use_deadlock_checking) {
-                FutexMutex.lockGlobalGraphMutex();
-                defer FutexMutex.unlockGlobalGraphMutex();
-
-                self.switchOwner(std.Thread.getCurrentId());
-
-                // no reason to detect deadlock if unlocking is possable
-            }
             return;
         }
 
         // Slow path: mark as contended.
         _ = atomicExchange(&self.value, 2);
 
-        if (self.use_deadlock_checking) {
-            FutexMutex.lockGlobalGraphMutex();
-            defer FutexMutex.unlockGlobalGraphMutex();
-
-            const thread_id = std.Thread.getCurrentId();
-
-            self.addWaitingThread(thread_id);
-
-            // detect deadlock
-            if (try detectCycle(thread_id)) {
-                // remove "thread_id -> self" so the graph is consistent
-                self.removeWaitingThread(thread_id);
-                return error.DeadlockDetected;
-            }
-        }
-
         // Wait until the lock becomes free.
         while (volatileLoad(&self.value) != 0) {
             _ = futex(&self.value, futexOpWait, 2, null, null, 0);
-        }
-
-        if (self.use_deadlock_checking) {
-            FutexMutex.lockGlobalGraphMutex();
-            defer FutexMutex.unlockGlobalGraphMutex();
-
-            const thread_id = std.Thread.getCurrentId();
-
-            self.removeWaitingThread(thread_id);
-            self.switchOwner(thread_id);
         }
     }
 
     /// Attempts to to acquire the lock non blocking.
     pub fn tryLock(self: *FutexMutex) bool {
         // Attempt to change from 0 -> 1
-        const old_val = atomicCompareExchange(&self.value, 0, 1);
-        if (old_val == 0) {
-            if (self.use_deadlock_checking) {
-                // If successful, record ownership
-                FutexMutex.lockGlobalGraphMutex();
-                defer FutexMutex.unlockGlobalGraphMutex();
-
-                self.switchOwner(std.Thread.getCurrentId());
-            }
-            return true;
-        }
-        return false;
+        return atomicCompareExchange(&self.value, 0, 1) == 0;
     }
 
     /// Attempts to acquire the lock, but fails with `error.Timeout` if `timeout_nanos` elapses first.
@@ -145,37 +51,11 @@ pub const FutexMutex = struct {
     pub fn timeoutLock(self: *FutexMutex, timeout_nanos: i128) !void {
         // Fast path: try to change 0 (unlocked) to 1 (locked).
         if (atomicExchange(&self.value, 1) == 0) {
-            if (self.use_deadlock_checking) {
-                FutexMutex.lockGlobalGraphMutex();
-                defer FutexMutex.unlockGlobalGraphMutex();
-
-                const thread_id = std.Thread.getCurrentId();
-
-                self.switchOwner(thread_id);
-
-                // no reason to detect deadlock if unlocking is possable
-            }
             return;
         }
 
         // Slow path: mark as contended.
         _ = atomicExchange(&self.value, 2);
-
-        if (self.use_deadlock_checking) {
-            FutexMutex.lockGlobalGraphMutex();
-            defer FutexMutex.unlockGlobalGraphMutex();
-
-            const thread_id = std.Thread.getCurrentId();
-
-            self.addWaitingThread(thread_id);
-
-            // detect deadlock
-            if (try detectCycle(thread_id)) {
-                // remove "thread_id -> self" so the graph is consistent
-                self.removeWaitingThread(thread_id);
-                return error.DeadlockDetected;
-            }
-        }
 
         // Find the deadline
         const start_ns = std.time.nanoTimestamp();
@@ -183,33 +63,16 @@ pub const FutexMutex = struct {
 
         // Loop until we either acquire the lock or time out.
         while (true) {
-            std.debug.print("looped on thread: {d}\n", .{std.Thread.getCurrentId()});
+            //std.debug.print("looped on thread: {d}\n", .{std.Thread.getCurrentId()});
             // If the lock looks free, try once more to set 0 -> 2.
             if (volatileLoad(&self.value) == 0) {
                 if (atomicExchange(&self.value, 2) == 0) {
-                    if (self.use_deadlock_checking) {
-                        FutexMutex.lockGlobalGraphMutex();
-                        defer FutexMutex.unlockGlobalGraphMutex();
-
-                        const thread_id = std.Thread.getCurrentId();
-
-                        self.removeWaitingThread(thread_id);
-                        self.switchOwner(thread_id);
-                    }
                     return; // success
                 }
             }
             // Figure out how much time remains.
             const now = std.time.nanoTimestamp();
             if (now >= deadline) {
-                if (self.use_deadlock_checking) {
-                    FutexMutex.lockGlobalGraphMutex();
-                    defer FutexMutex.unlockGlobalGraphMutex();
-
-                    const thread_id = std.Thread.getCurrentId();
-
-                    self.removeWaitingThread(thread_id);
-                }
                 return error.Timeout;
             }
 
@@ -220,24 +83,13 @@ pub const FutexMutex = struct {
             const rc = futex(&self.value, futexOpWait, 2, &ts, null, 0);
             if (rc == -1) {
                 const e = std.posix.errno(rc);
-                var returned_error: ?Error = null;
                 switch (e) {
                     .SUCCESS => unreachable, // `-1` cannot be success
                     .AGAIN => continue, //do nothing
-                    .INTR => returned_error = error.Interrupt, // Evil if true
-                    .TIMEDOUT => returned_error = error.Timeout,
-                    else => returned_error = error.Unknown,
+                    .INTR => return error.Interrupt, // Evil if true
+                    .TIMEDOUT => return error.Timeout,
+                    else => return error.Unknown,
                 }
-
-                if (self.use_deadlock_checking) {
-                    FutexMutex.lockGlobalGraphMutex();
-                    defer FutexMutex.unlockGlobalGraphMutex();
-
-                    const thread_id = std.Thread.getCurrentId();
-
-                    self.removeWaitingThread(thread_id);
-                }
-                return returned_error.?;
             }
         }
     }
@@ -250,101 +102,6 @@ pub const FutexMutex = struct {
             volatileStore(&self.value, 0);
             _ = futex(&self.value, futexOpWake, 1, null, null, 0);
         }
-
-        if (self.use_deadlock_checking) {
-            FutexMutex.lockGlobalGraphMutex();
-            defer FutexMutex.unlockGlobalGraphMutex();
-
-            //remove ownership
-            self.releaseOwnership();
-        }
-    }
-
-    // ------------
-    // Graph Utils
-    // ------------
-
-    /// Retrieve (or create) a MutexInfo for the given FutexMutex pointer.
-    pub fn getOrInitMutexInfo(self: *FutexMutex) *MutexInfo {
-        const entry = global_futex_map.getOrPutValue(self, MutexInfo{
-            .owner = null,
-        }) catch unreachable; // Out of memory TODO handle
-        return entry.value_ptr;
-    }
-
-    /// Indicate that `thread_id` is now waiting for `mutex_ptr` (add edge T -> M).
-    fn addWaitingThread(mutex_ptr: *FutexMutex, thread_id: std.Thread.Id) void {
-        const info = mutex_ptr.getOrInitMutexInfo();
-
-        // Make sure it's not already in the waiting list.
-        if (!info.waiting_threads.contains(thread_id)) {
-            _ = info.waiting_threads.put(thread_id, {}) catch unreachable;
-        }
-    }
-
-    /// Remove “thread_id -> mutex_ptr” (stop waiting).
-    fn removeWaitingThread(mutex_ptr: *FutexMutex, thread_id: std.Thread.Id) void {
-        // Remove the thread_id from waiting_threads if present
-        _ = getOrInitMutexInfo(mutex_ptr).waiting_threads.remove(thread_id);
-    }
-
-    /// Set “mutex_ptr -> thread_id” (mutex is now owned by that thread).
-    fn switchOwner(mutex_ptr: *FutexMutex, thread_id: std.Thread.Id) void {
-        const info = getOrInitMutexInfo(mutex_ptr);
-        info.owner = thread_id;
-    }
-
-    /// Remove “mutex_ptr -> thread_id” (mutex is no longer owned).
-    fn releaseOwnership(mutex_ptr: *FutexMutex) void {
-        const info = getOrInitMutexInfo(mutex_ptr);
-        info.owner = null;
-    }
-
-    // ----------------
-    // Cycle Detection
-    // ----------------
-
-    /// Naive DFS-based cycle check.
-    /// Returns True if there is Deadlock.
-    fn detectCycle(thread_id: std.Thread.Id) !bool {
-        // Keep track of visited threads to avoid infinite recursion.
-        var visited_set = std.AutoHashMap(std.Thread.Id, bool).init(FutexMutex.global_futex_map.allocator);
-        defer visited_set.deinit();
-        return try detectCycleRecursive(thread_id, &visited_set);
-    }
-
-    /// DFS from `current_thread`; returns true if `thread_id` is found again on the path.
-    fn detectCycleRecursive(current_thread: std.Thread.Id, visited_set: *std.AutoHashMap(std.Thread.Id, bool)) !bool {
-
-        // If true, there is a cycle.
-        if (try visited_set.fetchPut(current_thread, true)) |kv| {
-            if (kv.value) {
-                return true; // cycle
-            }
-        }
-
-        // Find all mutexes that current_thread is waiting on.
-        var it = FutexMutex.global_futex_map.iterator();
-        while (it.next()) |entry| {
-            const info = entry.value_ptr;
-
-            // If current_thread is in info.waiting_threads, that means T->M
-            if (info.waiting_threads.contains(current_thread)) {
-                // Then there's M->owner if owner is set.
-                if (info.owner) |owner_tid| {
-                    // current_thread -> M -> owner_tid
-                    // Recurse from owner_tid
-                    if (try detectCycleRecursive(owner_tid, visited_set)) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // return false if deadend and remove from visited set
-        _ = visited_set.remove(current_thread);
-
-        return false;
     }
 };
 
@@ -465,3 +222,115 @@ fn nanosecondsToTimespec(ns: i128) timespec {
 
     return .{ .tv_sec = secs, .tv_nsec = nanos };
 }
+
+// ----------------
+// Testing Struct
+// ----------------
+
+pub const DeadlockTimeoutStruct = struct {
+    mutexA: *FutexMutex,
+    mutexB: *FutexMutex,
+
+    evil_boolean_A: i1 = 0,
+    evil_boolean_B: i1 = -1,
+
+    ///Creates struct and adds the mutexes to the fields
+    pub fn init(mutexA: *FutexMutex, mutexB: *FutexMutex) DeadlockTimeoutStruct {
+        return DeadlockTimeoutStruct{ .mutexA = mutexA, .mutexB = mutexB };
+    }
+    /// first thread that does the lock acquisition in order
+    fn deadThread1(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?(FutexMutex.Error || std.mem.Allocator.Error), thread_num: usize) void {
+        {
+            self.mutexA.timeoutLock(timeout) catch |e| {
+                error_channel.* = e;
+                return;
+            };
+            defer self.mutexA.unlock();
+
+            std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
+
+            std.time.sleep(std.time.ns_per_ms * 3);
+
+            self.mutexB.timeoutLock(timeout) catch |e| {
+                error_channel.* = e;
+                return;
+            };
+            defer self.mutexB.unlock();
+
+            std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
+            if (self.evil_boolean_A != self.evil_boolean_B) {
+                self.evil_boolean_B = self.evil_boolean_A;
+            } else {
+                self.evil_boolean_B = ~self.evil_boolean_B;
+            }
+        }
+        std.debug.print("Thread {d} unlocked both Mutexes without a timeout\n", .{thread_num});
+    }
+
+    /// First thread that does the lock acquisition in reverse order
+    fn deadThread2(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?(FutexMutex.Error || std.mem.Allocator.Error), thread_num: usize) void {
+        {
+            self.mutexB.timeoutLock(timeout) catch |e| {
+                error_channel.* = e;
+                return;
+            }; // Lock resources in the opposite order as thread1 so that it deadlocks
+            defer self.mutexB.unlock();
+
+            std.debug.print("Thread {d} locked mutex B\n", .{thread_num});
+
+            std.time.sleep(std.time.ns_per_ms * 3);
+
+            self.mutexA.timeoutLock(timeout) catch |e| {
+                error_channel.* = e;
+                return;
+            };
+            defer self.mutexA.unlock();
+
+            std.debug.print("Thread {d} locked mutex A\n", .{thread_num});
+
+            if (self.evil_boolean_A != self.evil_boolean_B) {
+                self.evil_boolean_A = self.evil_boolean_B;
+            } else {
+                self.evil_boolean_A = ~self.evil_boolean_A;
+            }
+        }
+        std.debug.print("Thread {d} unlocked both Mutexes without a timeout\n", .{thread_num});
+    }
+
+    /// Starts the threads so that dead lock can happen
+    pub fn deadlock(self: *DeadlockTimeoutStruct, timeout: i128) !void {
+        const ThreadAndErrorPtrHolder = struct {
+            error_channel: ?FutexMutex.Error = null,
+            thread: std.Thread = undefined,
+        };
+        const len: comptime_int = 2;
+        var thread_tape: [len]ThreadAndErrorPtrHolder = undefined;
+
+        for (0..thread_tape.len) |index| {
+            thread_tape[index] = ThreadAndErrorPtrHolder{};
+            if (index % 2 == 0) {
+                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread1, .{ self, timeout, &thread_tape[index].error_channel, index });
+            } else {
+                thread_tape[index].thread = try std.Thread.spawn(.{}, deadThread2, .{ self, timeout, &thread_tape[index].error_channel, index });
+            }
+        }
+
+        for (0..thread_tape.len) |index| {
+            thread_tape[index].thread.join();
+        }
+        var error_tape: [len]?(FutexMutex.Error || std.mem.Allocator.Error) = undefined;
+        for (0..thread_tape.len) |index| {
+            if (thread_tape[index].error_channel) |error_channel_not_null| {
+                std.debug.print("thread no.: {d} errored\n", .{index});
+                error_tape[index] = error_channel_not_null;
+            } else {
+                error_tape[index] = null;
+            }
+        }
+        for (error_tape) |err| {
+            if (err) |err_not_null| {
+                return err_not_null;
+            }
+        }
+    }
+};
