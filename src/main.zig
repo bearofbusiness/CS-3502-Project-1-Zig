@@ -193,17 +193,76 @@ const DeadlockDetectionStruct = struct {
     }
 };
 
+fn mutex_demo(mutex: *FutexMutex) !void {
+    { //used inner scope for defer usage with errors
+        mutex.lock();
+        defer mutex.unlock();
+        motd = try std.fmt.allocPrint(std.heap.page_allocator, "h", .{});
+    }
+    var thread_tape: [4]std.Thread = undefined;
+    for (0..thread_tape.len) |index| {
+        thread_tape[index] = try std.Thread.spawn(.{}, mutex_demo_thread, .{ mutex, index });
+    }
+    for (0..thread_tape.len) |index| {
+        thread_tape[index].join();
+    }
+}
+
+var motd: []u8 = undefined;
+
+fn mutex_demo_thread(mutex: *FutexMutex, thread_number: usize) void {
+    for (0..3) |_| {
+        std.time.sleep(std.time.ns_per_s);
+        mutex.lock();
+        defer {
+            std.debug.print("Thread no.{d} unlocked the mutex\n\n", .{thread_number});
+            mutex.unlock();
+        }
+        std.debug.print("Thread no.{d} locked the mutex\n", .{thread_number});
+
+        std.debug.print("Thread no.{d} read the motd: {s}\n", .{ thread_number, motd });
+
+        std.heap.page_allocator.free(motd);
+
+        motd = std.fmt.allocPrint(std.heap.page_allocator, "Thread no.{d} was here", .{thread_number}) catch
+            &.{};
+        std.debug.print("Thread no.{d} set motd to Thread no.{d} was here\n", .{ thread_number, thread_number });
+    }
+}
+
+fn new_thread(thread_number: usize) void {
+    std.debug.print("Thread no.{d} has started\n", .{thread_number});
+
+    for (0..8) |_| {
+        std.time.sleep(std.time.ns_per_s * 1);
+        std.debug.print("Thread no.{d} has slept for one second\n", .{thread_number});
+    }
+
+    std.debug.print("Thread no.{d} has ended\n", .{thread_number});
+}
+
 pub fn main() !void {
+
+    // Phase one
+    std.debug.print("Basic thread creation\n", .{});
+
+    var thread_tape: [4]std.Thread = undefined;
+    for (0..thread_tape.len) |index| {
+        thread_tape[index] = try std.Thread.spawn(.{}, new_thread, .{index});
+    }
+    for (0..thread_tape.len) |index| {
+        thread_tape[index].join();
+    }
+
+    // Phase 2
     std.debug.print("\n\nBasic mutex usage\n", .{});
 
     var mutex = FutexMutex{};
 
-    try mutex.lock();
-    std.debug.print("Acquired futex mutex\n", .{});
-    // Critical code goes here.
-    mutex.unlock();
-    std.debug.print("Released futex mutex\n", .{});
+    try mutex_demo(&mutex);
+    //_ = try std.io.getStdIn().reader().readByte();
 
+    // Phase 3
     std.debug.print("\n\nDeadlock Timeout\n", .{});
 
     var mutex1 = FutexMutex{};
@@ -211,6 +270,7 @@ pub fn main() !void {
     var deadlockTimeoutStruct = DeadlockTimeoutStruct.init(&mutex, &mutex1);
 
     for (0..5) |_| {
+        //create deadlock from bad resource ordering
         deadlockTimeoutStruct.deadlock(1 * std.time.ns_per_s) catch |e| {
             switch (e) {
                 error.Timeout => {
@@ -232,6 +292,7 @@ pub fn main() !void {
     var deadlockDetectionStruct = DeadlockDetectionStruct.init(&mutex2, &mutex3);
 
     for (0..5) |_| {
+        //deadlock detection
         deadlockDetectionStruct.deadlock(1 * std.time.ns_per_s) catch |e| {
             switch (e) {
                 error.Timeout => {
@@ -248,6 +309,7 @@ pub fn main() !void {
         std.debug.print("evil_boolean_A: {d}, evil_boolean_B: {d}\n\n", .{ deadlockDetectionStruct.evil_boolean_A, deadlockDetectionStruct.evil_boolean_B });
     }
 
+    //avoids deadlocks
     try deadlockDetectionStruct.avoidDeadlock(5 * std.time.ns_per_s);
     std.debug.print("Phase 4 completed without deadlock\n", .{});
 }
