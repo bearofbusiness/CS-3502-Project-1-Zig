@@ -123,19 +123,28 @@ pub const FutexMutex = struct {
             }
         }
 
-        // Wait until the lock becomes free.
-        while (volatileLoad(&self.value) != 0) {
-            _ = futex(&self.value, futexOpWait, 2, null, null, 0);
-        }
+        while (true) {
 
-        if (self.use_deadlock_checking) {
-            FutexMutex.lockGlobalGraphMutex();
-            defer FutexMutex.unlockGlobalGraphMutex();
+            // Wait until the lock becomes free.
+            while (volatileLoad(&self.value) != 0) {
+                _ = futex(&self.value, futexOpWait, 2, null, null, 0);
+            }
 
-            const thread_id = std.Thread.getCurrentId();
+            // Attempt to atomically acquire it
+            if (atomicExchange(&self.value, 2) == 0) {
+                if (self.use_deadlock_checking) {
 
-            self.removeWaitingThread(thread_id);
-            self.switchOwner(thread_id);
+                    //update the global mutex
+                    FutexMutex.lockGlobalGraphMutex();
+                    defer FutexMutex.unlockGlobalGraphMutex();
+
+                    const thread_id = std.Thread.getCurrentId();
+
+                    self.removeWaitingThread(thread_id);
+                    self.switchOwner(thread_id);
+                }
+                return;
+            }
         }
     }
 
@@ -169,7 +178,7 @@ pub const FutexMutex = struct {
 
                 self.switchOwner(thread_id);
 
-                // no reason to detect deadlock if unlocking is possable
+                // no reason to detect deadlock if unlocking is possible
             }
             return;
         }

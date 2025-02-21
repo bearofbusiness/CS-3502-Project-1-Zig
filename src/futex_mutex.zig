@@ -25,7 +25,7 @@ pub const FutexMutex = struct {
     value: i32 = 0,
 
     /// Attempts to acquire the lock.
-    pub fn lock(self: *FutexMutex) !void {
+    pub fn lock(self: *FutexMutex) void {
         // Fast path: try to change 0 (unlocked) to 1 (locked).
         if (atomicExchange(&self.value, 1) == 0) {
             return;
@@ -34,9 +34,15 @@ pub const FutexMutex = struct {
         // Slow path: mark as contended.
         _ = atomicExchange(&self.value, 2);
 
-        // Wait until the lock becomes free.
-        while (volatileLoad(&self.value) != 0) {
-            _ = futex(&self.value, futexOpWait, 2, null, null, 0);
+        while (true) {
+            // Wait until the lock becomes free.
+            while (volatileLoad(&self.value) != 0) {
+                _ = futex(&self.value, futexOpWait, 2, null, null, 0);
+            }
+
+            if (atomicExchange(&self.value, 2) == 0) {
+                return;
+            }
         }
     }
 
@@ -168,7 +174,7 @@ pub fn atomicFetchSub(ptr: *i32, val: i32) i32 {
 
 pub fn volatileLoad(ptr: *i32) i32 {
     return asm volatile (
-        \\ movl (%[addr]), %eax
+        \\movl (%[addr]), %eax
         : [result] "={eax}" (-> i32),
         : [addr] "r" (ptr),
         : "memory"
@@ -242,6 +248,7 @@ pub const DeadlockTimeoutStruct = struct {
     fn deadThread1(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?(FutexMutex.Error || std.mem.Allocator.Error), thread_num: usize) void {
         {
             self.mutexA.timeoutLock(timeout) catch |e| {
+                std.debug.print("mutexA on thread no.{d} timedout\n", .{thread_num});
                 error_channel.* = e;
                 return;
             };
@@ -252,6 +259,7 @@ pub const DeadlockTimeoutStruct = struct {
             std.time.sleep(std.time.ns_per_ms * 3);
 
             self.mutexB.timeoutLock(timeout) catch |e| {
+                std.debug.print("mutexB on thread no.{d} timedout\n", .{thread_num});
                 error_channel.* = e;
                 return;
             };
@@ -271,6 +279,7 @@ pub const DeadlockTimeoutStruct = struct {
     fn deadThread2(self: *DeadlockTimeoutStruct, timeout: i128, error_channel: *?(FutexMutex.Error || std.mem.Allocator.Error), thread_num: usize) void {
         {
             self.mutexB.timeoutLock(timeout) catch |e| {
+                std.debug.print("mutexB on thread no.{d} timedout\n", .{thread_num});
                 error_channel.* = e;
                 return;
             }; // Lock resources in the opposite order as thread1 so that it deadlocks
@@ -281,6 +290,7 @@ pub const DeadlockTimeoutStruct = struct {
             std.time.sleep(std.time.ns_per_ms * 3);
 
             self.mutexA.timeoutLock(timeout) catch |e| {
+                std.debug.print("mutexA on thread no.{d} timedout\n", .{thread_num});
                 error_channel.* = e;
                 return;
             };
