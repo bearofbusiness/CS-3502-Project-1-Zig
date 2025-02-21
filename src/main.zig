@@ -214,7 +214,7 @@ pub fn main() !void {
         deadlockTimeoutStruct.deadlock(1 * std.time.ns_per_s) catch |e| {
             switch (e) {
                 error.Timeout => {
-                    std.debug.print("ThreadTimeout: possable deadlock\n", .{});
+                    std.debug.print("ThreadTimeout: possible deadlock\n", .{});
                 },
                 else => {
                     return e;
@@ -235,7 +235,7 @@ pub fn main() !void {
         deadlockDetectionStruct.deadlock(1 * std.time.ns_per_s) catch |e| {
             switch (e) {
                 error.Timeout => {
-                    std.debug.print("ThreadTimeout: possable deadlock\n", .{});
+                    std.debug.print("ThreadTimeout: possible deadlock\n", .{});
                 },
                 error.DeadlockDetected => {
                     std.debug.print("DeadlockDetected\n", .{});
