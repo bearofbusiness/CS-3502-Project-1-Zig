@@ -81,7 +81,7 @@ pub const FutexMutex = struct {
 
     fn lockGlobalGraphMutex() void {
         FutexMutex.global_graph_lock.lock() catch {
-            @panic("FutexMutex global graph lock errored. should be impossable");
+            @panic("FutexMutex global graph lock errored. should be impossible");
         };
     }
 
@@ -99,7 +99,7 @@ pub const FutexMutex = struct {
 
                 self.switchOwner(std.Thread.getCurrentId());
 
-                // no reason to detect deadlock if unlocking is possable
+                // no reason to detect deadlock if unlocking is possible
             }
             return;
         }
