@@ -15,6 +15,15 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    // Define a build option for choosing the main file
+    const main_choice = b.option([]const u8, "main", "Select main file (main1, main2)") orelse "main1";
+
+    // Define different source files
+    const main_file: []const u8 = if (std.mem.eql(u8, main_choice, "main2"))
+        "src/main2.zig"
+    else
+        "src/main1.zig"; // Default to main1.zig
+
     const lib = b.addStaticLibrary(.{
         .name = "CS-3502-Project-1-Zig",
         // In this case the main source file is merely a path, however, in more
@@ -31,7 +40,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "CS-3502-Project-1-Zig",
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path(main_file),
         .target = target,
         .optimize = optimize,
     });
