@@ -19,13 +19,18 @@ pub fn build(b: *std.Build) void {
     const main_choice = b.option([]const u8, "main", "Select main file (main1, main2)") orelse "main1";
 
     // Define different source files
-    const main_file: []const u8 = if (std.mem.eql(u8, main_choice, "main2"))
+    var main_file: []const u8 = if (std.mem.eql(u8, main_choice, "main2"))
         "src/main2.zig"
     else
         "src/main1.zig"; // Default to main1.zig
 
+    main_file = if (std.mem.eql(u8, main_choice, "main3"))
+        "src/main3.zig"
+    else
+        main_file; //do nothing
+
     const lib = b.addStaticLibrary(.{
-        .name = "CS-3502-Project-1-Zig",
+        .name = main_choice,
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
         .root_source_file = b.path("src/root.zig"),
@@ -39,7 +44,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(lib);
 
     const exe = b.addExecutable(.{
-        .name = "CS-3502-Project-1-Zig",
+        .name = main_choice,
         .root_source_file = b.path(main_file),
         .target = target,
         .optimize = optimize,
