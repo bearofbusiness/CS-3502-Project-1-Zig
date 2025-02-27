@@ -1,6 +1,7 @@
 # CS-3502-Project-1-Zig
 ## Installation
 Install [Zig](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)</br>
+and [Git](https://git-scm.com/downloads)</br>
 `git clone https://github.com/bearofbusiness/CS-3502-Project-1-Zig.git && cd CS-3502-Project-1-Zig`
 ## Multi-Threading & Mutex Implementation
 ### Run
