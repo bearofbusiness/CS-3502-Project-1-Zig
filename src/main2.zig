@@ -70,7 +70,7 @@ pub fn main() !void {
     const alloc = std.heap.page_allocator;
 
     // Create a Theater with 2 blocks, each starting with 10 seats
-    var theater = try Theater.init(alloc, 2, 10);
+    var theater = try Theater.init(alloc, 10, 10);
     defer theater.deinit(alloc);
 
     // Spawn 3 threads for concurrency
