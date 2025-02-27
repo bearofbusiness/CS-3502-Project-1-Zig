@@ -78,7 +78,13 @@ pub fn main() !void {
     var threads: [num_threads]std.Thread = undefined;
 
     for (0..num_threads) |i| {
-        threads[i] = try std.Thread.spawn(.{}, workerThread, .{ &theater, i });
+        threads[i] = std.Thread.spawn(.{}, workerThread, .{ &theater, i }) catch |err| {
+            for (0..i) |o| {
+                threads[o].join();
+            }
+            std.debug.print("errored on thread num.{d}\n", .{i});
+            return err;
+        };
     }
 
     // Join them
