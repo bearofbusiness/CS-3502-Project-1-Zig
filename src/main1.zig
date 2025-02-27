@@ -309,6 +309,8 @@ pub fn main() !void {
         std.debug.print("evil_boolean_A: {d}, evil_boolean_B: {d}\n\n", .{ deadlockDetectionStruct.evil_boolean_A, deadlockDetectionStruct.evil_boolean_B });
     }
 
+    std.debug.print("Phase 4 start with corrected resource ordering\n", .{});
+
     //avoids deadlocks
     try deadlockDetectionStruct.avoidDeadlock(5 * std.time.ns_per_s);
     std.debug.print("Phase 4 completed without deadlock\n", .{});
