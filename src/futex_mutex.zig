@@ -21,17 +21,14 @@ pub const FutexMutex = struct {
         }
 
         // Slow path: mark as contended.
-        _ = futex_impl.atomicExchange(&self.value, 2);
+        if (futex_impl.atomicExchange(&self.value, 2) == 0) {
+            return;
+        }
 
-        while (true) {
-            // Wait until the lock becomes free.
-            while (futex_impl.volatileLoad(&self.value) != 0) {
-                _ = futex_impl.futex(&self.value, futex_impl.futexOpWait, 2, null, null, 0);
-            }
-
-            if (futex_impl.atomicExchange(&self.value, 2) == 0) {
-                return;
-            }
+        // Wait until the lock becomes free.
+        while (futex_impl.atomicExchange(&self.value, 2) != 0) {
+            //const rc
+            _ = futex_impl.futex(&self.value, futex_impl.futexOpWait, 2, null, null, 0);
         }
     }
 
@@ -50,7 +47,9 @@ pub const FutexMutex = struct {
         }
 
         // Slow path: mark as contended.
-        _ = futex_impl.atomicExchange(&self.value, 2);
+        if (futex_impl.atomicExchange(&self.value, 2)) {
+            return;
+        }
 
         // Find the deadline
         const start_ns = std.time.nanoTimestamp();
@@ -58,7 +57,6 @@ pub const FutexMutex = struct {
 
         // Loop until we either acquire the lock or time out.
         while (true) {
-            //std.debug.print("looped on thread: {d}\n", .{std.Thread.getCurrentId()});
             // If the lock looks free, try once more to set 0 -> 2.
             if (futex_impl.volatileLoad(&self.value) == 0) {
                 if (futex_impl.atomicExchange(&self.value, 2) == 0) {
@@ -75,7 +73,7 @@ pub const FutexMutex = struct {
             var ts = futex_impl.nanosecondsToTimespec(deadline - now);
 
             // Futex wait. Passes 2 as val as it is the expected value
-            const rc = futex_impl.futex(&self.value, futex_impl.futexOpWait, 2, &ts, null, 0);
+            const rc = futex_impl.futex(&self.value, futex_impl.futexOpWait, 1, &ts, null, 0);
             if (rc == -1) {
                 const e = std.posix.errno(rc);
                 switch (e) {
@@ -92,9 +90,8 @@ pub const FutexMutex = struct {
     /// Releases the lock.
     pub fn unlock(self: *FutexMutex) void {
         // Atomically subtract 1.
-        if (futex_impl.atomicFetchSub(&self.value, 1) != 1) {
+        if (futex_impl.atomicExchange(&self.value, 0) != 1) {
             // If the previous value was not 1, then there were waiters.
-            futex_impl.volatileStore(&self.value, 0);
             _ = futex_impl.futex(&self.value, futex_impl.futexOpWake, 1, null, null, 0);
         }
     }
