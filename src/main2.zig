@@ -1,5 +1,5 @@
 const std = @import("std");
-const FutexMutex = @import("futex_mutex.zig").FutexMutex;
+const FutexMutex = @import("futex_mutex_deadlock_detection.zig").FutexMutex;
 
 pub const SeatBlock = struct {
     mutex: FutexMutex,
@@ -23,10 +23,14 @@ pub const Theater = struct {
     }
 };
 
-fn bookSeats(block: *SeatBlock, seats: i32) bool {
+fn bookSeats(block: *SeatBlock, seats: i32) !bool {
     // Simple lock-based seat booking
-    block.mutex.lock();
-    defer block.mutex.unlock();
+    var lock = false;
+
+    try block.mutex.lock();
+    defer if (lock) block.mutex.unlock();
+
+    lock = true;
 
     if (block.available_seats >= seats) {
         block.available_seats -= seats;
