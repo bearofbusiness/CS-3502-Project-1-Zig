@@ -54,6 +54,7 @@ fn workerThread(theater_ptr: *Theater, thread_id: usize) !void {
         } else {
             try stdout.print("Thread {d} NOT ENOUGH seats for {d} in block {d}\n", .{ thread_id, seats_to_book, block_idx });
         }
+        try bw.flush();
     }
 
     // Thread done
