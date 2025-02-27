@@ -49,7 +49,7 @@ pub const FutexMutex = struct {
     };
 
     var global_futex_map = initFutexMap(std.heap.page_allocator);
-    var global_graph_lock = futex_mutex.FutexMutex{};
+    var global_graph_lock = futex_mutex.FutexMutex{}; // std.Thread.Mutex{}; //
 
     value: i32 = 0,
 
@@ -79,21 +79,21 @@ pub const FutexMutex = struct {
     pub fn lock(self: *FutexMutex) !void {
         // Fast path: try to change 0 (unlocked) to 1 (locked).
         if (futex_impl.atomicExchange(&self.value, 1) == 0) {
-            if (self.use_deadlock_checking) {
+            {
                 FutexMutex.lockGlobalGraphMutex();
                 defer FutexMutex.unlockGlobalGraphMutex();
 
                 self.switchOwner(std.Thread.getCurrentId());
-
-                // no reason to detect deadlock if unlocking is possible
             }
+
+            // no reason to detect deadlock if unlocking is possible
             return;
         }
 
         // Slow path: mark as contended.
         _ = futex_impl.atomicExchange(&self.value, 2);
 
-        if (self.use_deadlock_checking) {
+        {
             FutexMutex.lockGlobalGraphMutex();
             defer FutexMutex.unlockGlobalGraphMutex();
 
@@ -118,8 +118,7 @@ pub const FutexMutex = struct {
 
             // Attempt to atomically acquire it
             if (futex_impl.atomicExchange(&self.value, 2) == 0) {
-                if (self.use_deadlock_checking) {
-
+                {
                     //update the global mutex
                     FutexMutex.lockGlobalGraphMutex();
                     defer FutexMutex.unlockGlobalGraphMutex();
@@ -137,9 +136,8 @@ pub const FutexMutex = struct {
     /// Attempts to to acquire the lock non blocking.
     pub fn tryLock(self: *FutexMutex) bool {
         // Attempt to change from 0 -> 1
-        const old_val = futex_impl.atomicCompareExchange(&self.value, 0, 1);
-        if (old_val == 0) {
-            if (self.use_deadlock_checking) {
+        if (futex_impl.atomicCompareExchange(&self.value, 0, 1) == 0) {
+            {
                 // If successful, record ownership
                 FutexMutex.lockGlobalGraphMutex();
                 defer FutexMutex.unlockGlobalGraphMutex();
@@ -156,12 +154,14 @@ pub const FutexMutex = struct {
     pub fn timeoutLock(self: *FutexMutex, timeout_nanos: i128) !void {
         // Fast path: try to change 0 (unlocked) to 1 (locked).
         if (futex_impl.atomicExchange(&self.value, 1) == 0) {
-            FutexMutex.lockGlobalGraphMutex();
-            defer FutexMutex.unlockGlobalGraphMutex();
+            {
+                FutexMutex.lockGlobalGraphMutex();
+                defer FutexMutex.unlockGlobalGraphMutex();
 
-            const thread_id = std.Thread.getCurrentId();
+                const thread_id = std.Thread.getCurrentId();
 
-            self.switchOwner(thread_id);
+                self.switchOwner(thread_id);
+            }
 
             return;
         }
@@ -191,29 +191,34 @@ pub const FutexMutex = struct {
 
         // Loop until we either acquire the lock or time out.
         while (true) {
+            std.log.debug("{d} is looping", .{std.Thread.getCurrentId()});
             //std.debug.print("looped on thread: {d}\n", .{std.Thread.getCurrentId()});
             // If the lock looks free, try once more to set 0 -> 2.
             if (futex_impl.volatileLoad(&self.value) == 0) {
                 if (futex_impl.atomicExchange(&self.value, 2) == 0) {
-                    FutexMutex.lockGlobalGraphMutex();
-                    defer FutexMutex.unlockGlobalGraphMutex();
+                    {
+                        FutexMutex.lockGlobalGraphMutex();
+                        defer FutexMutex.unlockGlobalGraphMutex();
 
-                    const thread_id = std.Thread.getCurrentId();
+                        const thread_id = std.Thread.getCurrentId();
 
-                    self.removeWaitingThread(thread_id);
-                    self.switchOwner(thread_id);
+                        self.removeWaitingThread(thread_id);
+                        self.switchOwner(thread_id);
+                    }
                     return; // success
                 }
             }
             // Figure out how much time remains.
             const now = std.time.nanoTimestamp();
             if (now >= deadline) {
-                FutexMutex.lockGlobalGraphMutex();
-                defer FutexMutex.unlockGlobalGraphMutex();
+                {
+                    FutexMutex.lockGlobalGraphMutex();
+                    defer FutexMutex.unlockGlobalGraphMutex();
 
-                const thread_id = std.Thread.getCurrentId();
+                    const thread_id = std.Thread.getCurrentId();
 
-                self.removeWaitingThread(thread_id);
+                    self.removeWaitingThread(thread_id);
+                }
                 return error.Timeout;
             }
 
@@ -232,13 +237,14 @@ pub const FutexMutex = struct {
                     .TIMEDOUT => returned_error = error.Timeout,
                     else => returned_error = error.Unknown,
                 }
+                {
+                    FutexMutex.lockGlobalGraphMutex();
+                    defer FutexMutex.unlockGlobalGraphMutex();
 
-                FutexMutex.lockGlobalGraphMutex();
-                defer FutexMutex.unlockGlobalGraphMutex();
+                    const thread_id = std.Thread.getCurrentId();
 
-                const thread_id = std.Thread.getCurrentId();
-
-                self.removeWaitingThread(thread_id);
+                    self.removeWaitingThread(thread_id);
+                }
                 return returned_error.?;
             }
         }
