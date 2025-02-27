@@ -74,7 +74,7 @@ pub fn main() !void {
     defer theater.deinit(alloc);
 
     // Spawn 3 threads for concurrency
-    const num_threads = 3;
+    const num_threads = 10;
     var threads: [num_threads]std.Thread = undefined;
 
     for (0..num_threads) |i| {

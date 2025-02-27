@@ -80,7 +80,7 @@ const DeadlockDetectionStruct = struct {
             error_channel: ?FutexMutex.Error = null,
             thread: std.Thread = undefined,
         };
-        const len: comptime_int = 2;
+        const len: comptime_int = 10;
         var thread_tape: [len]ThreadAndErrorPtrHolder = undefined;
 
         for (0..thread_tape.len) |index| {
@@ -161,7 +161,7 @@ const DeadlockDetectionStruct = struct {
             error_channel: ?(FutexMutexDeadlockDetection.Error || std.mem.Allocator.Error) = null,
             thread: std.Thread = undefined,
         };
-        const len: comptime_int = 2;
+        const len: comptime_int = 10;
         var thread_tape: [len]ThreadAndErrorPtrHolder = undefined;
 
         // Spawn 2 threads that both do "safe" locking
@@ -199,7 +199,7 @@ fn mutex_demo(mutex: *FutexMutex) !void {
         defer mutex.unlock();
         motd = try std.fmt.allocPrint(std.heap.page_allocator, "h", .{});
     }
-    var thread_tape: [4]std.Thread = undefined;
+    var thread_tape: [10]std.Thread = undefined;
     for (0..thread_tape.len) |index| {
         thread_tape[index] = try std.Thread.spawn(.{}, mutex_demo_thread, .{ mutex, index });
     }
@@ -246,7 +246,7 @@ pub fn main() !void {
     // Phase one
     std.debug.print("Basic thread creation\n", .{});
 
-    var thread_tape: [4]std.Thread = undefined;
+    var thread_tape: [10]std.Thread = undefined;
     for (0..thread_tape.len) |index| {
         thread_tape[index] = try std.Thread.spawn(.{}, new_thread, .{index});
     }
