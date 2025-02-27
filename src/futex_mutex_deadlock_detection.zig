@@ -91,7 +91,7 @@ pub const FutexMutex = struct {
         }
 
         // Slow path: mark as contended.
-        if (futex_impl.atomicExchange(&self.value, 2)) {
+        if (futex_impl.atomicExchange(&self.value, 2) == 0) {
             return;
         }
 
