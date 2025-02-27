@@ -91,7 +91,9 @@ pub const FutexMutex = struct {
         }
 
         // Slow path: mark as contended.
-        _ = futex_impl.atomicExchange(&self.value, 2);
+        if (futex_impl.atomicExchange(&self.value, 2)) {
+            return;
+        }
 
         {
             FutexMutex.lockGlobalGraphMutex();
@@ -167,7 +169,9 @@ pub const FutexMutex = struct {
         }
 
         // Slow path: mark as contended.
-        _ = futex_impl.atomicExchange(&self.value, 2);
+        if (futex_impl.atomicExchange(&self.value, 2)) {
+            return;
+        }
 
         { // Inner scope for defering
             FutexMutex.lockGlobalGraphMutex();
@@ -253,9 +257,8 @@ pub const FutexMutex = struct {
     /// Releases the lock.
     pub fn unlock(self: *FutexMutex) void {
         // Atomically subtract 1.
-        if (futex_impl.atomicFetchSub(&self.value, 1) != 1) {
+        if (futex_impl.atomicExchange(&self.value, 0) != 1) {
             // If the previous value was not 1, then there were waiters.
-            futex_impl.volatileStore(&self.value, 0);
             _ = futex_impl.futex(&self.value, futex_impl.futexOpWake, 1, null, null, 0);
         }
 
