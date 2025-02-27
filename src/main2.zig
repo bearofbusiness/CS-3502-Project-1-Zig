@@ -25,12 +25,8 @@ pub const Theater = struct {
 
 fn bookSeats(block: *SeatBlock, seats: i32) !bool {
     // Simple lock-based seat booking
-    var lock = false;
-
     try block.mutex.lock();
-    defer if (lock) block.mutex.unlock();
-
-    lock = true;
+    defer block.mutex.unlock();
 
     if (block.available_seats >= seats) {
         block.available_seats -= seats;
@@ -51,7 +47,7 @@ fn workerThread(theater_ptr: *Theater, thread_id: usize) !void {
         const block_idx: usize = @intCast(rng.random().int(usize) % theater_ptr.blocks.len);
         const seats_to_book: i32 = @mod(rng.random().int(i32), 5) + 1; // 1..5 seats
 
-        const success = bookSeats(&theater_ptr.blocks[block_idx], seats_to_book);
+        const success = try bookSeats(&theater_ptr.blocks[block_idx], seats_to_book);
         if (success) {
             // Print to stdout
             try stdout.print("Thread {d} booked {d} seats in block {d}\n", .{ thread_id, seats_to_book, block_idx });
