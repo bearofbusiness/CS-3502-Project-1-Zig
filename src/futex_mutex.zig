@@ -184,7 +184,7 @@ pub const DeadlockTimeoutStruct = struct {
             error_channel: ?FutexMutex.Error = null,
             thread: std.Thread = undefined,
         };
-        const len: comptime_int = 2;
+        const len: comptime_int = 10;
         var thread_tape: [len]ThreadAndErrorPtrHolder = undefined;
 
         for (0..thread_tape.len) |index| {
