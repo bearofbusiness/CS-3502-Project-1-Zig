@@ -111,27 +111,19 @@ pub const FutexMutex = struct {
             }
         }
 
-        while (true) {
+        // Wait until the lock becomes free. while trying to aquire
+        while (futex_impl.atomicExchange(&self.value, 2) != 0) {
+            _ = futex_impl.futex(&self.value, futex_impl.futexOpWait, 2, null, null, 0);
+        }
+        {
+            //update the global mutex
+            FutexMutex.lockGlobalGraphMutex();
+            defer FutexMutex.unlockGlobalGraphMutex();
 
-            // Wait until the lock becomes free.
-            while (futex_impl.volatileLoad(&self.value) != 0) {
-                _ = futex_impl.futex(&self.value, futex_impl.futexOpWait, 2, null, null, 0);
-            }
+            const thread_id = std.Thread.getCurrentId();
 
-            // Attempt to atomically acquire it
-            if (futex_impl.atomicExchange(&self.value, 2) == 0) {
-                {
-                    //update the global mutex
-                    FutexMutex.lockGlobalGraphMutex();
-                    defer FutexMutex.unlockGlobalGraphMutex();
-
-                    const thread_id = std.Thread.getCurrentId();
-
-                    self.removeWaitingThread(thread_id);
-                    self.switchOwner(thread_id);
-                }
-                return;
-            }
+            self.removeWaitingThread(thread_id);
+            self.switchOwner(thread_id);
         }
     }
 
