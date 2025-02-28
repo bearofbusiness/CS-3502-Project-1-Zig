@@ -248,7 +248,7 @@ pub const FutexMutex = struct {
 
     /// Releases the lock.
     pub fn unlock(self: *FutexMutex) void {
-        // Atomically subtract 1.
+        // Atomically exchange and check if value was contented
         if (futex_impl.atomicExchange(&self.value, 0) != 1) {
             // If the previous value was not 1, then there were waiters.
             _ = futex_impl.futex(&self.value, futex_impl.futexOpWake, 1, null, null, 0);
