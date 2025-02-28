@@ -43,12 +43,12 @@ pub const FutexMutex = struct {
     pub fn timeoutLock(self: *FutexMutex, timeout_nanos: i128) !void {
         // Fast path: try to change 0 (unlocked) to 1 (locked).
         if (futex_impl.atomicExchange(&self.value, 1) == 0) {
-            return;
+            return; // acquired the lock
         }
 
         // Slow path: mark as contended.
-        if (futex_impl.atomicExchange(&self.value, 2)) {
-            return;
+        if (futex_impl.atomicExchange(&self.value, 2) == 0) {
+            return; // acquired the lock
         }
 
         // Find the deadline
