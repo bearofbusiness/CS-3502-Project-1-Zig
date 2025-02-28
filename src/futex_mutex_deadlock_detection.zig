@@ -111,7 +111,7 @@ pub const FutexMutex = struct {
             }
         }
 
-        // Wait until the lock becomes free. while trying to aquire
+        // Wait until the lock becomes free. while trying to acquire
         while (futex_impl.atomicExchange(&self.value, 2) != 0) {
             _ = futex_impl.futex(&self.value, futex_impl.futexOpWait, 2, null, null, 0);
         }
