@@ -165,7 +165,7 @@ pub const FutexMutex = struct {
             return;
         }
 
-        { // Inner scope for defering
+        { // Inner scope for deferring
             FutexMutex.lockGlobalGraphMutex();
             defer FutexMutex.unlockGlobalGraphMutex();
 
